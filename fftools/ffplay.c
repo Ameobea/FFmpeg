@@ -3260,6 +3260,50 @@ static void seek_chapter(VideoState *is, int incr)
                                  AV_TIME_BASE_Q), 0, 0);
 }
 
+VideoState *is;
+
+static void event_loop(VideoState *cur_stream);
+
+static void start_playback(void)
+{
+    is = stream_open(input_filename, file_iformat);
+    if (!is) {
+        av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
+        do_exit(NULL);
+    }
+
+    event_loop(is);
+}
+
+static void restart_playback(void)
+{
+    if (is) {
+        stream_close(is);
+    }
+
+#if CONFIG_AVFILTER
+    av_freep(&vfilters_list);
+#endif
+    avformat_network_deinit();
+    if (show_status)
+        printf("RELOADING STREAM...\n\n");
+
+    start_playback();
+}
+
+static void catchsignal(int signal)
+{
+    if (signal == SIGUSR1) {
+        SDL_Event sdlevent;
+        sdlevent.type = SDL_KEYDOWN;
+        sdlevent.key.keysym.sym = SDLK_z;
+
+        SDL_PushEvent(&sdlevent);
+    } else {
+        exit(signal);
+    }
+}
+
 /* handle an event sent by the GUI */
 static void event_loop(VideoState *cur_stream)
 {
@@ -3269,6 +3313,7 @@ static void event_loop(VideoState *cur_stream)
     for (;;) {
         double x;
         refresh_loop_wait_event(cur_stream, &event);
+
         switch (event.type) {
         case SDL_KEYDOWN:
             if (exit_on_keydown || event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_q) {
@@ -3279,6 +3324,8 @@ static void event_loop(VideoState *cur_stream)
             if (!cur_stream->width)
                 continue;
             switch (event.key.keysym.sym) {
+            case SDLK_z:
+                restart_playback(); // never returns
             case SDLK_f:
                 toggle_full_screen(cur_stream);
                 cur_stream->force_refresh = 1;
@@ -3669,7 +3716,7 @@ void show_help_default(const char *opt, const char *arg)
 int main(int argc, char **argv)
 {
     int flags;
-    VideoState *is;
+    struct sigaction act, old;
 
     init_dynload();
 
@@ -3686,6 +3733,11 @@ int main(int argc, char **argv)
 
     signal(SIGINT , sigterm_handler); /* Interrupt (ANSI).    */
     signal(SIGTERM, sigterm_handler); /* Termination (ANSI).  */
+
+    memset(&act, 0, sizeof(act));
+    // sigemptyset(&act.sa_mask);
+    act.sa_handler = catchsignal;
+    sigaction(SIGUSR1, &act, &old);
 
     show_banner(argc, argv, options);
 
@@ -3756,13 +3808,7 @@ int main(int argc, char **argv)
         }
     }
 
-    is = stream_open(input_filename, file_iformat);
-    if (!is) {
-        av_log(NULL, AV_LOG_FATAL, "Failed to initialize VideoState!\n");
-        do_exit(NULL);
-    }
-
-    event_loop(is);
+    start_playback();
 
     /* never returns */
 
